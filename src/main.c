@@ -1,133 +1,303 @@
-#include "stm32f4xx_hal.h"
-#include "stm32f401xe.h"
+#include "stm32f4xx_conf.h"
+#include "stm32f4xx.h"
 
-static void SystemClock_Config(void);
-static void Error_Handler(void);
+#include "pp-printf.h"
+#include "biquad.h"
+#include "usart.h"
+#include "servo.h"
+#include "rpc.h"
+#include "motors.h"
+
+extern void pwm_test();
+void fet_charge(int on);
+void fet_break(int on);
+int is_touchdown();
+uint32_t get_ticks_count();
+void hv_init();
+void delay(int ms);
+
+
+void clock_info()
+{
+    RCC_ClocksTypeDef rcc;
+    RCC_GetClocksFreq(&rcc);
+
+    pp_printf("SWS: %d\n\r", rcc.sws);
+    pp_printf("SYSCLK: %d Hz\n\r", rcc.SYSCLK_Frequency);
+    pp_printf("AHB: %d Hz\n\r", rcc.HCLK_Frequency);
+    pp_printf("APB1: %d Hz\n\r", rcc.PCLK1_Frequency);
+    pp_printf("APB2: %d Hz\n\r", rcc.PCLK2_Frequency);
+}
+
+
+int wait_key()
+{
+  while(!usart_poll());
+  return usart_rx_char();
+}
+
+#if 0
+void test_esc()
+{
+  //esc_init();
+    motors_init();
+
+    //esc_throttle_set(0.3);
+    //throttle_set(250);
+    esc_set_speed(20.0);
+
+    int n = 0, dn = 1;
+
+
+//    arc_test();
+
+    //esc_throttle_set(0.25);
+
+
+    for(;;)
+    {
+      //EXTI_GenerateSWInterrupt(EXTI_Line3);
+      esc_control_update();
+      //pp_printf("Pulses: %d cnt %d\n\r", pcnt,  TIM_GetCounter(TIM2) );
+      //pp_printf("n %d dn %d ESC Speed %d %d\n\r", n, dn, esc_get_speed(), (int) esc_get_speed_rps() );
+      delay(10);
+
+  #if 0
+  n+=dn;
+
+      if(dn > 0)
+        head_step(1);
+      else
+        head_step(0);
+
+      if( n == 100 || n == 0)
+      {
+        dn = -dn;
+      }
+      #endif
+
+    }
+
+}
+
+void test_gpio_pin( void *gpio, int pin )
+{
+  GPIO_InitTypeDef GPIO_InitStructure;
+
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
+
+  GPIO_InitStructure.GPIO_Pin = pin; // TIM4/PWM3
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL ;
+  GPIO_Init(gpio, &GPIO_InitStructure);
+
+  for(;;)
+  {
+    GPIO_SetBits(gpio, pin);
+    delay(1);
+    GPIO_ResetBits(gpio, pin);
+    delay(1);
+  }
+
+}
+
+int setpoint = 1000;
+
+#if 1
+
+void handle_kb()
+{
+
+
+
+    if (usart_poll())
+    {
+      int c = usart_rx_char();
+      int new_setting = 1;
+
+      switch(c)
+      {
+       /*   case 'z': if(notch1_center > 100) notch1_center -= 3.0; break;
+          case 'a': if(notch1_center < 2000) notch1_center += 3.0;break;
+          case 'c': if(notch1_center > 100) notch2_center -= 3.0; break;
+          case 'd': if(notch1_center < 2000) notch2_center += 3.0;break;
+          case 's': servo.gain_d1 += 5; break;
+          case 'x': servo.gain_d1 -= 5; break;*/
+          case 'f': setpoint += 5; break;
+          case 'v': setpoint -= 5; break;
+          default:
+        new_setting = 0;
+      }
+
+    if(new_setting)
+    {
+      pp_printf("sp: %d\n\r", setpoint);
+      servo_set_setpoint(setpoint);
+    }
+  }
+
+}
+#endif
+
+#endif
+
+uint16_t buf[8192];
+
+
+
+void cmd_adc_test(struct rpc_request *rq)
+{
+  int n_samples = rpc_pop_int32(rq);
+  int n_avg = rpc_pop_int32(rq);
+
+  servo_test_acquisition(n_samples, n_avg, buf);
+  rpc_answer_send(RPC_ID_ADC_TEST, 2 * n_samples, buf);
+
+}
+
+void cmd_esc_set_speed(struct rpc_request *rq)
+{
+  float speed = (float) rpc_pop_int32(rq) / 1000.0;
+  pp_printf("SetSpeed: %d\n", (int)speed);
+  esc_set_speed( speed );
+}
+
+void cmd_esc_get_speed(struct rpc_request *rq)
+{
+  float speed = esc_get_speed_rps( );
+  int speed_int = (int) ( speed * 1000.0 );
+
+  rpc_answer_send(RPC_ID_GET_ESC_SPEED, 4, &speed_int);
+}
+
+void main_loop()
+{
+  struct rpc_request rq;
+  while (1)
+  {
+    esc_control_update();
+
+    if(!rpc_request_get(&rq))
+      continue;
+
+    switch(rq.id)
+    {
+      case RPC_ID_ADC_TEST: cmd_adc_test(&rq); break;
+      case RPC_ID_GET_ESC_SPEED: cmd_esc_get_speed(&rq); break;
+      case RPC_ID_SET_ESC_SPEED: cmd_esc_set_speed(&rq); break;
+
+      default: break;
+    }
+  }
+}
 
 int main(void)
 {
-    HAL_Init();
-    SystemClock_Config();
+    SystemInit();
+    SysTick_Config(SystemCoreClock / 1000);
 
-    GPIO_InitTypeDef  GPIO_InitStruct;
-    __GPIOA_CLK_ENABLE();
 
-    GPIO_InitStruct.Pin = GPIO_PIN_5;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FAST;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    GPIO_InitTypeDef  GPIO_InitStructure;
 
-    while(1)
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+//    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+//    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
+//    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOD, ENABLE);
+
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Fast_Speed;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+
+
+    usart_init();
+    //clock_info();
+    servo_init();
+    esc_init();
+    esc_set_speed(5.0);
+
+    main_loop();
+#if 0
+
+//    pwm_init();
+
+  //  hv_init();
+
+
+  //  fet_charge(0);
+   // fet_break(0);
+
+    //servo_drive_set(1000);
+
+    servo_set_setpoint(2500);
+    //servo_set_setpoint( 1000 );
+
+
+   /* for(;;)
     {
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-        HAL_Delay(100);
-    }
-}
+      adc_samples = 0;
+      delay(1000);
+      pp_printf("samples: %d\n\r", adc_samples);
+    }*/
 
-/**
-  * @brief  System Clock Configuration
-  *         The system Clock is configured as follow :
-  *            System Clock source            = PLL (HSI)
-  *            SYSCLK(Hz)                     = 84000000
-  *            HCLK(Hz)                       = 84000000
-  *            AHB Prescaler                  = 1
-  *            APB1 Prescaler                 = 2
-  *            APB2 Prescaler                 = 1
-  *            HSI Frequency(Hz)              = 16000000
-  *            PLL_M                          = 16
-  *            PLL_N                          = 336
-  *            PLL_P                          = 4
-  *            PLL_Q                          = 7
-  *            VDD(V)                         = 3.3
-  *            Main regulator output voltage  = Scale2 mode
-  *            Flash Latency(WS)              = 2
-  * @param  None
-  * @retval None
-  */
-static void SystemClock_Config(void)
+    //for(;;)
+    {
+      //pp_printf("s = start response test\n\r");
+      //while(wait_key() != 's');
+
+      pp_printf("Response test...\n\r");
+
+      //test();
+      servo_start_logging(0);
+
+      delay(100);
+
+      for(;;)
+        handle_kb();
+
+      for(;;)//for(int i=0;i<3;i++)
+      {
+        servo_set_setpoint(1000);
+        delay(100);
+        servo_set_setpoint(1000);
+        delay(100);
+      }
+
+      struct servo_log_entry *log;
+      int log_samples;
+
+      servo_stop_logging(&log, &log_samples);
+
+      pp_printf("@respstart %d\n\r", log_samples);
+
+
+      for(int i = 0; i < log_samples; i++)
+      {
+        pp_printf("@respdata %d %d %d %d\n\r", i, log[i].setpoint, log[i].error, log[i].y);
+      }
+
+for(;;)
 {
-    RCC_ClkInitTypeDef RCC_ClkInitStruct;
-    RCC_OscInitTypeDef RCC_OscInitStruct;
-    HAL_StatusTypeDef status;
+        //pp_printf("last_x %d\n\r",last_x);
+        //handle_kb();
+      }
 
-    /* Enable Power Control clock */
-    __PWR_CLK_ENABLE();
+      servo_set_setpoint(2000);
 
-    /* The voltage scaling allows optimizing the power consumption when the device is
-        clocked below the maximum system frequency, to update the voltage scaling value
-        regarding system frequency refer to product datasheet.  */
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
 
-    /* Enable HSI Oscillator and activate PLL with HSI as source */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-    RCC_OscInitStruct.HSICalibrationValue = 0x10;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-    RCC_OscInitStruct.PLL.PLLM = 16;
-    RCC_OscInitStruct.PLL.PLLN = 336;
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
-    RCC_OscInitStruct.PLL.PLLQ = 7;
-    if((status = HAL_RCC_OscConfig(&RCC_OscInitStruct)) != HAL_OK)
-    {
-        Error_Handler();
+
     }
 
-    /* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2
-        clocks dividers */
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-    if(HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-    {
-        Error_Handler();
-    }
 
-    /* Enable HSE Oscillator
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-
-    if((status = HAL_RCC_OscConfig(&RCC_OscInitStruct)) != HAL_OK)
-    {
-        Error_Handler();
-    }
-    */
-}
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @param  None
-  * @retval None
-  */
-static void Error_Handler(void)
-{
-    /* User may add here some code to deal with this error */
-    while(1)
-    {
-    }
-}
-
-#ifdef  USE_FULL_ASSERT
-
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t* file, uint32_t line)
-{
-    /* User can add his own implementation to report the file name and line number,
-        ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-
-    /* Infinite loop */
-    while (1)
-    {
-    }
-}
 #endif
+
+}
+
+

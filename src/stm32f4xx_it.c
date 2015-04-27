@@ -1,6 +1,9 @@
-#include "stm32f4xx_hal.h"
-#include "stm32f401xe.h"
+#include <stdint.h>
+
+#include "stm32f4xx.h"
 #include "stm32f4xx_it.h"
+
+extern void esc_pulse_handler();
 
 void NMI_Handler(void)
 {
@@ -38,6 +41,21 @@ void UsageFault_Handler(void)
     }
 }
 
+volatile int pcnt = 0;
+
+void EXTI15_10_IRQHandler(void)
+{
+  if(EXTI_GetITStatus(EXTI_Line12) != RESET)
+  {
+    pcnt++;
+    esc_pulse_handler();
+
+    EXTI_ClearITPendingBit(EXTI_Line12);
+  }
+}
+
+
+
 void SVC_Handler(void)
 {
 }
@@ -50,11 +68,28 @@ void PendSV_Handler(void)
 {
 }
 
+static volatile uint32_t delay_count = 0, tick_count = 0;
+
 void SysTick_Handler(void)
 {
-    HAL_IncTick();
+    if(delay_count)
+        delay_count--;
+    tick_count++;
 }
 
 void OTG_FS_IRQHandler(void)
 {
 }
+
+
+void delay ( uint32_t how_much )
+{
+    delay_count = how_much;
+    while(delay_count);
+}
+
+uint32_t get_ticks_count()
+{
+    return tick_count;
+}
+
