@@ -48,7 +48,7 @@ class UsbRpcReadoutThread(threading.Thread):
 
 class UsbRpcConnection:
 
-    def __init__(self,dev_="/dev/ttyACM1", baudrate_=115200):
+    def __init__(self,dev_="/dev/ttyUSB0", baudrate_=115200):
         self.ser = serial.Serial(port=dev_,baudrate=baudrate_,timeout=0.1,rtscts=False)
         self.console_queue = Queue.Queue()
         self.readout_thread = UsbRpcReadoutThread(self)
@@ -89,6 +89,7 @@ class SteveControl:
     ID_ADC_TEST = 0x1
     ID_ESC_SET_SPEED = 0x2
     ID_ESC_GET_SPEED = 0x3
+    ID_SERVO_RESPONSE = 0x4
 
     def __init__(self, conn):
         self.conn = conn
@@ -107,6 +108,26 @@ class SteveControl:
         d = struct.unpack("<I", rsp.data)
         return float(d) / 1000.0
 
+    def measure_servo_response(self, init_setpoint, target_setpoint):
+        self.conn.send( UsbRpcMessage( self.ID_SERVO_RESPONSE, struct.pack(">II", init_setpoint, target_setpoint) ) )
+        rsp = self.conn.receive()
+        n_samples = rsp.size() / 6
+        rv = {'time' : [], 'setpoint':[], 'error' : [], 'drive': []}
+        samplerate = (21341)
+
+        import numpy
+
+        t_t = numpy.linspace(0, 1000.0/samplerate * n_samples, n_samples)
+
+        #print("rsp size", rsp.size())
+        for i in range(0, n_samples):
+            s,e,d=struct.unpack("<hhh", rsp.data[i*6:(i+1)*6])
+            #print(s,e,d)
+            rv['time'].append(t_t[i])
+            rv['setpoint'].append(s)
+            rv['error'].append(e)
+            rv['drive'].append(d)
+        return rv
 #conn = UsbRpcConnection()
 #ctl = SteveControl( conn )
 

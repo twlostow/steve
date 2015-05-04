@@ -6,6 +6,7 @@
 #define RPC_ID_ADC_TEST 0x1
 #define RPC_ID_SET_ESC_SPEED 0x2
 #define RPC_ID_GET_ESC_SPEED 0x3
+#define RPC_ID_SERVO_RESPONSE 0x4
 
 struct rpc_request {
     int id;

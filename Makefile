@@ -25,6 +25,7 @@ EXT_SRCS = stm32f4xx_rcc.c \
 	   stm32f4xx_exti.c \
 	   stm32f4xx_syscfg.c \
 	   stm32f4xx_usart.c \
+	   stm32f4xx_dma.c \
 	    misc.c
 #EXT_SRCS += stm32f4xx_hal_rcc.c
 #EXT_SRCS += stm32f4xx_hal_gpio.c

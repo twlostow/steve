@@ -174,21 +174,79 @@ void cmd_esc_get_speed(struct rpc_request *rq)
   rpc_answer_send(RPC_ID_GET_ESC_SPEED, 4, &speed_int);
 }
 
+
+void cmd_servo_response(struct rpc_request *rq)
+{
+  int init_setpoint = rpc_pop_int32(rq);
+  int target_setpoint = rpc_pop_int32(rq);
+  struct servo_log_entry *log;
+  int log_samples;
+
+  servo_set_setpoint(init_setpoint);
+  servo_start_logging( 0 );
+  delay(200);
+  int i;
+  for(i=0;i<3;i++)
+  {
+  delay(20);
+  servo_set_setpoint(target_setpoint);
+  delay(20);
+  servo_set_setpoint(init_setpoint);
+  }
+  delay(200);
+  servo_stop_logging(&log, &log_samples);
+
+//  pp_printf("log has %d samples\n\r", log_samples);
+  rpc_answer_send(RPC_ID_SERVO_RESPONSE, log_samples * sizeof(struct servo_log_entry), log);
+}
+
+
+
+struct timeout {
+  uint32_t last;
+  uint32_t period;
+};
+
+void tmo_init(struct timeout *tmo, uint32_t period)
+{
+  tmo->last = get_ticks_count();
+  tmo->period = period;
+}
+
+int tmo_hit(struct timeout *tmo)
+{
+  uint32_t t =  get_ticks_count();
+  if(t - tmo->last >= tmo->period)
+  {
+    tmo->last = t;
+    return 1;
+  }
+  return 0;
+}
+
 void main_loop()
 {
   struct rpc_request rq;
+  struct timeout keepalive;
+
+  tmo_init(&keepalive, 1000);
   while (1)
   {
     esc_control_update();
 
+    if(tmo_hit(&keepalive))
+      pp_printf("Heartbeat!\n\r");
+
     if(!rpc_request_get(&rq))
       continue;
+
 
     switch(rq.id)
     {
       case RPC_ID_ADC_TEST: cmd_adc_test(&rq); break;
       case RPC_ID_GET_ESC_SPEED: cmd_esc_get_speed(&rq); break;
       case RPC_ID_SET_ESC_SPEED: cmd_esc_set_speed(&rq); break;
+      case RPC_ID_SERVO_RESPONSE: cmd_servo_response(&rq); break;
 
       default: break;
     }
@@ -221,9 +279,30 @@ int main(void)
     //clock_info();
     servo_init();
     esc_init();
-    esc_set_speed(5.0);
+    esc_set_speed(10.0);
 
+    //test_tacho();
+
+    //test_servo_dma();
     main_loop();
+
+
+
+    for(;;)
+    {
+      FlagStatus f1 = DMA_GetFlagStatus(DMA2_Stream0, DMA_FLAG_TCIF0);
+      if(f1)
+      {
+        dump_buf();
+        break;
+      }
+
+
+
+    }
+
+    for(;;);
+    //main_loop();
 #if 0
 
 //    pwm_init();

@@ -1,3 +1,6 @@
+  // PB7 = servo PWM HI
+  // PB8 = servo PWM LO
+
 #include "stm32f4xx_conf.h"
 #include "stm32f4xx.h"
 
@@ -6,6 +9,10 @@
 #include "servo.h"
 
 #define GAIN_SHIFT 14
+
+static void servo_adc_start();
+static void servo_adc_stop();
+
 
 struct bdf_state {
   int xd[10];
@@ -95,18 +102,20 @@ static inline void servo_update(int x)
   int y = servo.bias + ( (term_p + term_d1 + term_i ) >> GAIN_SHIFT );
 
 
-  y = biquad_update(&servo.notch1, y);
+  //y = biquad_update(&servo.notch1, y);
   //y = biquad_update(&servo.notch2, y);
 
   //y = 10000;
 
-  y = biquad_update(&servo.lp_main, y);
+  //y = biquad_update(&servo.lp_main, y);
 
   if( y > 1000 )
     y= 1000;
 
   if (y< -1000)
     y = -1000;
+
+//y=-y;
 
   servo_drive_set ( y );
 
@@ -119,16 +128,40 @@ static inline void servo_update(int x)
     }
 }
 
-void ADC_IRQHandler()
+static volatile uint16_t *test_acq_buf;
+static volatile int test_acq_count = 0;
+#define ADC_DMA_BUF_SIZE 32
+
+static volatile uint16_t adc_dma_buf[ADC_DMA_BUF_SIZE];
+
+void DMA2_Stream0_IRQHandler()
 {
+  int sum = 0, i;
+
+  servo_adc_stop();
+
   GPIO_SetBits(GPIOB, GPIO_Pin_6);
   GPIO_ResetBits(GPIOB, GPIO_Pin_6);
 
   adc_samples++;
-  int x = ADC_GetConversionValue(ADC1);
-  ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
 
-  servo_update(x);
+  DMA_ClearITPendingBit(DMA2_Stream0, DMA_IT_TCIF0);
+
+  servo_adc_start();
+
+  for(i = 0; i < ADC_DMA_BUF_SIZE; i++)
+    sum += adc_dma_buf[i];
+
+  sum /= ADC_DMA_BUF_SIZE;
+
+  servo_update(sum);
+
+
+  if(test_acq_count)
+  {
+    *test_acq_buf++ = sum;
+    test_acq_count--;
+  }
 }
 
 
@@ -140,15 +173,44 @@ void servo_set_setpoint(int target)
 
 
 
+void dump_buf()
+{
+  pp_printf("ADC Buffer Dump : \n\r");
+  int i;
+  for(i=0;i<ADC_DMA_BUF_SIZE;i++)
+    pp_printf("%d ", adc_dma_buf[i]);
+  pp_printf("\n\r");
+
+}
 static void servo_adc_init()
 {
-
   ADC_CommonInitTypeDef ADC_CommonInitStructure;
-
   /* Enable peripheral clocks *************************************************/
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_DMA2, ENABLE);
   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC2, ENABLE);
+
+DMA_InitTypeDef       DMA_InitStructure;
+
+  DMA_InitStructure.DMA_Channel = DMA_Channel_0;
+  DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&ADC1->DR;
+  DMA_InitStructure.DMA_Memory0BaseAddr = (uint32_t)adc_dma_buf;
+  DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralToMemory;
+  DMA_InitStructure.DMA_BufferSize = ADC_DMA_BUF_SIZE;
+  DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+  DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
+  DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
+  DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;
+  DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
+  DMA_InitStructure.DMA_Priority = DMA_Priority_High;
+  DMA_InitStructure.DMA_FIFOMode = DMA_FIFOMode_Disable;
+  DMA_InitStructure.DMA_FIFOThreshold = DMA_FIFOThreshold_HalfFull;
+  DMA_InitStructure.DMA_MemoryBurst = DMA_MemoryBurst_Single;
+  DMA_InitStructure.DMA_PeripheralBurst = DMA_PeripheralBurst_Single;
+
+  DMA_Init(DMA2_Stream0, &DMA_InitStructure);
+  DMA_Cmd(DMA2_Stream0, ENABLE);
 
 
   /* ADCs configuration ------------------------------------------------------*/
@@ -178,7 +240,7 @@ static void servo_adc_init()
 
   ADC_InitStructure.ADC_Resolution = ADC_Resolution_12b;
   ADC_InitStructure.ADC_ScanConvMode = ENABLE;
-  ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
+  ADC_InitStructure.ADC_ContinuousConvMode = ENABLE;
   ADC_InitStructure.ADC_ExternalTrigConvEdge = ADC_ExternalTrigConvEdge_Rising;
   ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_T4_CC4;
   ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
@@ -186,24 +248,37 @@ static void servo_adc_init()
   ADC_Init(ADC1, &ADC_InitStructure);
 
   /* ADC1 regular channels 10, 11 configuration */
-  ADC_RegularChannelConfig(ADC1, ADC_Channel_10, 1, ADC_SampleTime_480Cycles);
+  ADC_RegularChannelConfig(ADC1, ADC_Channel_10, 1, ADC_SampleTime_15Cycles);
 
   NVIC_InitTypeDef NVIC_InitStructure;
 
-  NVIC_InitStructure.NVIC_IRQChannel = ADC_IRQn;
+  NVIC_InitStructure.NVIC_IRQChannel = DMA2_Stream0_IRQn;
   NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
 
-/* Enable ADC1 */
-  ADC_ITConfig(ADC1, ADC_IT_EOC, ENABLE);
+/* Enable DMA */
+  DMA_ITConfig(DMA2_Stream0, DMA_IT_TC, ENABLE);
 
-  ADC_Cmd(ADC1, ENABLE);
-  ADC_SoftwareStartConv(ADC1);
-
-
+  servo_adc_start();
 }
+
+static void servo_adc_stop()
+{
+  ADC_DMACmd(ADC1, DISABLE);
+  ADC_Cmd(ADC1, DISABLE);
+}
+
+
+static void servo_adc_start()
+{
+
+  ADC_DMARequestAfterLastTransferCmd(ADC1, ENABLE);
+  ADC_DMACmd(ADC1, ENABLE);
+  ADC_Cmd(ADC1, ENABLE);
+}
+
 
 
 void servo_pwm_init()
@@ -223,6 +298,8 @@ void servo_pwm_init()
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL ;
   GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+
 
   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_7; // TIM4/PWM2
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
@@ -285,13 +362,16 @@ void servo_init()
     bdf_init( &servo.dfun );
 
 
-    servo.gain_p = 4* 15 * 270;//1.0 * 255; //0.8*255;
-    servo.gain_d1 =  4*15 * 900; //3000;
-    servo.gain_i = 4;
+    servo.gain_p = 4 * 15 * 270;//1.0 * 255; //0.8*255;
+    servo.gain_d1 =  10000;//4*15 * 900; //3000;
+    servo.gain_i = 2;//2;//4;
     servo.bias = 320;
     servo.integ = 0;
-    //servo_pwm_init();
+
+    servo_pwm_init();
     servo_adc_init();
+
+
 }
 
 
@@ -313,11 +393,13 @@ void servo_stop_logging( struct servo_log_entry **log, int *n_samples )
 void test()
 {
  for(;;)
+
   pp_printf("adc_samples %d\n\r", adc_samples);
 }
 
 void servo_test_acquisition(int n_samples, int averaging, uint16_t *buf)
 {
+ #if 0
   ADC_InitTypeDef ADC_InitStructure;
 
 
@@ -351,4 +433,32 @@ void servo_test_acquisition(int n_samples, int averaging, uint16_t *buf)
       }
       buf[i] = sum / averaging;
   }
+  #endif
+  __disable_irq();
+  test_acq_count = n_samples;
+  test_acq_buf = buf;
+  __enable_irq();
+
+  while(test_acq_count);
+
+
+}
+
+void test_servo_dma()
+{
+  uint16_t buf[1024];
+  int i;
+  servo_test_acquisition(1024, 1, buf);
+
+  for(i=0;i<1024;i++)
+    pp_printf("%d ", buf[i]);
+
+  pp_printf("\n\rDone!\n\r");
+
+ /*for(;;)
+  {
+    FlagStatus f1 = DMA_GetFlagStatus(DMA2_Stream0, DMA_FLAG_TCIF0);
+    pp_printf("s  %d\n\r", adc_samples);
+  }*/
+
 }

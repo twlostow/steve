@@ -212,6 +212,7 @@ volatile int esc_wpos = 0;
 volatile int esc_expected_value = 0;
 volatile int esc_threshold;
 
+volatile uint32_t last_tacho_ticks = 0;
 
 void esc_pulse_handler()
 {
@@ -226,14 +227,15 @@ void esc_pulse_handler()
     else
       delta = tics - last_esc_tics;
 
-    esc_pulse_filter [ (esc_wpos++) & PULSE_FILTER_MASK ] = delta;
-
-    if (delta < esc_threshold)
+    if(delta > 4000) // ignore noise
     {
-
-
+      esc_pulse_filter [ (esc_wpos++) & PULSE_FILTER_MASK ] = delta;
     }
+
+
   }
+
+  last_tacho_ticks = get_ticks_count();
 
   last_esc_tics_valid = 1;
   last_esc_tics = tics;
@@ -261,6 +263,8 @@ int esc_compute_outliers()
   int median = pf[PULSE_FILTER_SIZE/2];
     int avg = 0, n = 0, i;
 
+
+
   for(i=0;i<PULSE_FILTER_SIZE;i++)
   {
     int ratio = (100 * abs(pf[i] - median)) / median;
@@ -273,28 +277,7 @@ int esc_compute_outliers()
   }
 
 
-  /*int i;
-  int min_v = INT_MAX, max_v = INT_MIN;
-  for(i=0;i<PULSE_FILTER_SIZE;i++)
-  {
-    int d = esc_pulse_filter[i];
-    if (d < min_v)
-      min_v = d;
-    if (d > max_v)
-      max_v = d;
-  }
 
-  int avg = 0, n = 0;
-  for(i=0;i<PULSE_FILTER_SIZE;i++)
-  {
-    int d = esc_pulse_filter[i];
-    if (d < min_v * 3 / 2 && d > max_v / 3)
-    {
-      avg += d;
-      n++;
-    }
-  }
-*/
   if(n)
   {
     avg/=n;
@@ -323,6 +306,13 @@ float esc_get_speed_rps()
 {
   esc_compute_outliers();
 
+
+  int dt = get_ticks_count() - last_tacho_ticks;
+  if(dt > 10)
+    return 0.0;
+
+  //pp_printf("dt %d\n\r", dt);
+
   if(esc_expected_value == 0)
     return 0.0;
 
@@ -342,6 +332,7 @@ void esc_set_speed ( float setpoint_rps )
 
 void esc_control_update()
 {
+#if 0
   uint32_t ticks = get_ticks_count();
 
   if(ticks - esc_update_count_last >= ESC_UPDATE_PERIOD_MS)
@@ -357,6 +348,9 @@ void esc_control_update()
     //if(esc_target_speed>0)
     esc_throttle_set(y);
   }
+#endif
+
+  //esc_throttle_set(0.3);
 }
 
 
@@ -401,3 +395,17 @@ void head_step( int dir )
     GPIO_ResetBits(GPIOC, GPIO_Pin_5);
 }
 
+
+
+void test_tacho()
+{
+  pp_printf("TestTacho:\n\r");
+  for(;;)
+    {
+      if(esc_expected_value > 0)
+        pp_printf("Exp: %d\n\r", esc_expected_value);
+
+      esc_control_update();
+      delay(1);
+    }
+}
