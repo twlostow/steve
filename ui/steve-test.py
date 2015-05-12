@@ -4,19 +4,27 @@
 import sys
 import time
 import matplotlib.pyplot as plt
-import numpy
+import numpy as np
 
 from rpc import SteveControl, UsbRpcConnection
 
 conn = UsbRpcConnection()
 ctl = SteveControl( conn )
 
-resp = ctl.measure_servo_response(2000,2500)
+resp = ctl.measure_servo_response(2000,1500,200)
 
+plt.subplot(2,1,1)
 plt.plot(resp['time'],resp['setpoint'],label="Setpoint")
 plt.plot(resp['time'],resp['error'],label="Position")
 plt.plot(resp['time'],resp['drive'],label="Drive")
 plt.legend(framealpha=0.5)
+plt.subplot(2,1,2)
+#np.abs(fftshift(A))
+A = np.log10(np.abs(np.fft.fftshift(np.fft.fft(resp['error']))))
+freq = np.linspace(-21341/2, 21341/2, len(A))
+plt.plot(freq,A,label="FFT(Position)")
+plt.legend(framealpha=0.5)
+
 plt.show()
 
 while True:

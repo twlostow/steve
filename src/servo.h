@@ -17,5 +17,12 @@ void servo_init();
 void servo_start_logging( int offset );
 void servo_stop_logging( struct servo_log_entry **log, int *n_samples );
 void servo_test_acquisition(int n_samples, int averaging, uint16_t *buf);
+void servo_set_target(int target, int dvdt);
+int servo_position_ready();
+int servo_get_sensor();
+void servo_all_back(int duration_samples);
+
+
+int ldrive_get_encoder_value(int i);
 
 #endif

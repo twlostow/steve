@@ -7,6 +7,9 @@
 #define RPC_ID_SET_ESC_SPEED 0x2
 #define RPC_ID_GET_ESC_SPEED 0x3
 #define RPC_ID_SERVO_RESPONSE 0x4
+#define RPC_ID_PROFILE_HEIGHT 0x5
+#define RPC_ID_LDRIVE_STEP 0x6
+#define RPC_ID_LDRIVE_READ_ENCODER 0x7
 
 struct rpc_request {
     int id;

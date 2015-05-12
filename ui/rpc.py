@@ -90,6 +90,7 @@ class SteveControl:
     ID_ESC_SET_SPEED = 0x2
     ID_ESC_GET_SPEED = 0x3
     ID_SERVO_RESPONSE = 0x4
+    ID_PROFILE_HEIGHT = 0x5
 
     def __init__(self, conn):
         self.conn = conn
@@ -108,8 +109,8 @@ class SteveControl:
         d = struct.unpack("<I", rsp.data)
         return float(d) / 1000.0
 
-    def measure_servo_response(self, init_setpoint, target_setpoint):
-        self.conn.send( UsbRpcMessage( self.ID_SERVO_RESPONSE, struct.pack(">II", init_setpoint, target_setpoint) ) )
+    def measure_servo_response(self, init_setpoint, target_setpoint,dvdt=1):
+        self.conn.send( UsbRpcMessage( self.ID_SERVO_RESPONSE, struct.pack(">III", init_setpoint, target_setpoint, dvdt) ) )
         rsp = self.conn.receive()
         n_samples = rsp.size() / 6
         rv = {'time' : [], 'setpoint':[], 'error' : [], 'drive': []}
@@ -128,6 +129,30 @@ class SteveControl:
             rv['error'].append(e)
             rv['drive'].append(d)
         return rv
+
+    def profile_height(self, init_setpoint, n_points):
+        self.conn.send( UsbRpcMessage( self.ID_PROFILE_HEIGHT, struct.pack(">II", init_setpoint, n_points) ) )
+        rsp = self.conn.receive()
+
+        print("ProfH size %d" % rsp.size())
+
+        n_samples = rsp.size() / 8
+        rv = []
+
+        for i in range(0, n_samples):
+            h,r=struct.unpack("<II", rsp.data[i*8:(i+1)*8])
+            rv.append((r,h))
+            print(r,h)
+
+        rv3 = sorted(rv, key=lambda tup: tup[0])
+
+        rv2 = {'rho' : [], 'h':[] }
+        for s in rv3:
+            rv2['rho'].append(s[0])
+            rv2['h'].append(s[1])
+
+        return rv2
+
 #conn = UsbRpcConnection()
 #ctl = SteveControl( conn )
 

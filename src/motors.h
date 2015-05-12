@@ -6,8 +6,9 @@ void esc_enable_power(int enable);
 float esc_get_speed_rps();
 void esc_set_speed ( float setpoint_rps );
 void esc_control_update();
+int esc_get_radial_position();
 
-void head_init();
-void head_step( int dir );
+void ldrive_init();
+void ldrive_step( int dir );
 
 #endif

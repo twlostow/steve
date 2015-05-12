@@ -210,9 +210,11 @@ uint32_t last_esc_tics = 0;
 volatile int esc_pulse_filter [ PULSE_FILTER_SIZE ];
 volatile int esc_wpos = 0;
 volatile int esc_expected_value = 0;
-volatile int esc_threshold;
 
 volatile uint32_t last_tacho_ticks = 0;
+volatile uint32_t esc_last_origin = 0;
+volatile int esc_marks_per_turn = 0;
+volatile int esc_mark_count = 0;
 
 void esc_pulse_handler()
 {
@@ -230,9 +232,19 @@ void esc_pulse_handler()
     if(delta > 4000) // ignore noise
     {
       esc_pulse_filter [ (esc_wpos++) & PULSE_FILTER_MASK ] = delta;
+
+      if (delta > 5 * esc_expected_value / 4) // got full rotation marker?
+      {
+        esc_marks_per_turn = esc_mark_count;
+        esc_mark_count = 0;
+      }
+
+      if(delta > esc_expected_value / 3)
+      {
+        esc_mark_count ++;
+        esc_last_origin = tics;
+      }
     }
-
-
   }
 
   last_tacho_ticks = get_ticks_count();
@@ -278,15 +290,18 @@ int esc_compute_outliers()
 
 
 
+  __disable_irq();
+
   if(n)
   {
     avg/=n;
     //pp_printf("avg %d n %d\n\r", avg, n );
     esc_expected_value = avg;
-    esc_threshold = avg * 3 / 2;
   } else {
-    esc_expected_value = 0;
+    esc_expected_value = 10000000;
   }
+
+  __enable_irq();
 
 
 }
@@ -332,7 +347,7 @@ void esc_set_speed ( float setpoint_rps )
 
 void esc_control_update()
 {
-#if 0
+#if 1
   uint32_t ticks = get_ticks_count();
 
   if(ticks - esc_update_count_last >= ESC_UPDATE_PERIOD_MS)
@@ -343,7 +358,7 @@ void esc_control_update()
 
     float y = pi_update(&esc_pi, err);
 
-    pp_printf("speed %d err %d throttle %d\n\r", (int)esc_get_speed_rps(), (int)(1000.0*err), (int)(1000.0*y));
+    //pp_printf("speed %d err %d throttle %d orig %d pos %d\n\r", (int)esc_get_speed_rps(), (int)(1000.0*err), (int)(1000.0*y), esc_last_origin, esc_get_radial_position());
 
     //if(esc_target_speed>0)
     esc_throttle_set(y);
@@ -355,7 +370,7 @@ void esc_control_update()
 
 
 
-void head_init()
+void ldrive_init()
 {
     GPIO_InitTypeDef  GPIO_InitStructure;
 
@@ -381,7 +396,7 @@ void head_init()
     esc_init();
 }
 
-void head_step( int dir )
+void ldrive_step( int dir )
 {
     if(dir)
       GPIO_ResetBits(GPIOC, GPIO_Pin_9);
@@ -397,7 +412,7 @@ void head_step( int dir )
 
 
 
-void test_tacho()
+/*void test_tacho()
 {
   pp_printf("TestTacho:\n\r");
   for(;;)
@@ -408,4 +423,19 @@ void test_tacho()
       esc_control_update();
       delay(1);
     }
+}*/
+
+int esc_get_radial_position()
+{
+  uint32_t marks;
+  uint32_t origin;
+  uint32_t cnt;
+  __disable_irq();
+  marks = esc_mark_count;
+  origin = esc_last_origin;
+  cnt = TIM_GetCounter(TIM2);
+  __enable_irq();
+
+
+  return (esc_mark_count - 1) * 200 + ( 200LL * ((int64_t)cnt - origin) / esc_expected_value );
 }

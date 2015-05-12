@@ -14,10 +14,10 @@ void adc_init()
   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC2, ENABLE);
-    
+
   /* DMA2 Stream0 channel0 configuration **************************************/
 //  DMA_Config();
-  
+
   /* ADCs configuration ------------------------------------------------------*/
   /* Configure ADC Channel10, 11, 12 pin as analog input */
 
@@ -32,7 +32,7 @@ void adc_init()
   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL ;
   GPIO_Init(GPIOC, &GPIO_InitStructure);
 
-  
+
   /* ADC Common Init */
   ADC_CommonInitStructure.ADC_Mode = ADC_DualMode_RegSimult;
   ADC_CommonInitStructure.ADC_Prescaler = ADC_Prescaler_Div2;
@@ -51,20 +51,20 @@ void adc_init()
   ADC_InitStructure.ADC_NbrOfConversion = 1;
   ADC_Init(ADC1, &ADC_InitStructure);
 
-  /* ADC1 regular channels 10, 11 configuration */ 
+  /* ADC1 regular channels 10, 11 configuration */
   ADC_RegularChannelConfig(ADC1, ADC_Channel_10, 1, ADC_SampleTime_15Cycles);
 
 /* Enable ADC1 */
   ADC_Cmd(ADC1, ENABLE);
-  ADC_SoftwareStartConv(ADC1);  
+  ADC_SoftwareStartConv(ADC1);
 
-  
+
 }
 
 void adc_acquire(int n_samples, int *buf)
 {
   /* Start ADC1 Software Conversion */
- 
+
  int i;
 
   for(i = 0; i < n_samples; i++)
@@ -73,7 +73,7 @@ void adc_acquire(int n_samples, int *buf)
       ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
       buf[i] = ADC_GetConversionValue(ADC1);
   }
- 
+
 
 
 }
@@ -126,6 +126,15 @@ void fet_charge(int on)
     else
       GPIO_SetBits(GPIOC, GPIO_Pin_10);
 }
+
+void strobe_led(int on)
+{
+    if(on)
+      GPIO_SetBits(GPIOC, GPIO_Pin_10);
+    else
+      GPIO_ResetBits(GPIOC, GPIO_Pin_10);
+}
+
 
 void fet_break(int on)
 {
@@ -188,12 +197,12 @@ void arc_test()
 
 	if(new_setting)
 	    pp_printf("repeat %d freq %d duty %d delay %d\n\r", arc_repeat, arc_freq, arc_duty, arc_delay);
-    }	
+    }
 
     int r;
 
 //    pp_printf("touch %d\n\r", is_touchdown());
-    
+
 
     for(;;)
     {
@@ -215,9 +224,9 @@ void arc_test()
 
         for(r=0;r<arc_repeat;r++)
 	{
-	    volatile int f1 = arc_freq * arc_duty / 100;	
+	    volatile int f1 = arc_freq * arc_duty / 100;
     	    volatile int d;
-	
+
             hv_trigger(1);
     	    for(d=0;d<f1;d++);
     	    hv_trigger(0);
@@ -227,7 +236,7 @@ void arc_test()
 
 //	volatile int d;
 
-//	for(d=0;d<1;d++);	
+//	for(d=0;d<1;d++);
 	fet_break(0);
 
 
@@ -243,7 +252,7 @@ float adc_measure()
   int n_samples = 16;
     int buf[1024];
     int i;
-   
+
     float mean, dsum, std;
   //for(;;)
   {
@@ -268,7 +277,7 @@ float adc_measure()
     //pp_printf("mean %d std^2 %d\n\r", (int) mean, (int) std);
 
     return mean;
-      
+
 
   }
 }

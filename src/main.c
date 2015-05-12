@@ -179,6 +179,7 @@ void cmd_servo_response(struct rpc_request *rq)
 {
   int init_setpoint = rpc_pop_int32(rq);
   int target_setpoint = rpc_pop_int32(rq);
+  int dvdt = rpc_pop_int32(rq);
   struct servo_log_entry *log;
   int log_samples;
 
@@ -186,18 +187,77 @@ void cmd_servo_response(struct rpc_request *rq)
   servo_start_logging( 0 );
   delay(200);
   int i;
-  for(i=0;i<3;i++)
+  for(i=0;i<1;i++)
   {
+  servo_set_target(target_setpoint, dvdt);
+//  while(!servo_position_ready());
   delay(20);
-  servo_set_setpoint(target_setpoint);
+  servo_set_target(init_setpoint, dvdt);
+  //while(!servo_position_ready());
   delay(20);
-  servo_set_setpoint(init_setpoint);
   }
   delay(200);
   servo_stop_logging(&log, &log_samples);
 
 //  pp_printf("log has %d samples\n\r", log_samples);
   rpc_answer_send(RPC_ID_SERVO_RESPONSE, log_samples * sizeof(struct servo_log_entry), log);
+}
+
+
+void cmd_profile_height(struct rpc_request *rq)
+{
+  int initial_setpoint = rpc_pop_int32(rq);
+  int n_points = rpc_pop_int32(rq);
+  pp_printf("initial_setp %d np %d\n", initial_setpoint, n_points);
+  servo_set_target(initial_setpoint, 1);
+  while(!servo_position_ready());
+  int i;
+  delay(10);
+  int p, r;
+
+
+
+  for(i=0;i<n_points;i++)
+  {
+    esc_control_update();
+    servo_set_target(300, 15);
+    while(!is_touchdown());// pp_printf("target %d setp %d sen %d\n", servo_get_target(), servo_get_setpoint(), servo_get_sensor());
+
+
+    p = servo_get_sensor();
+    r = esc_get_radial_position();
+
+    servo_set_setpoint(p + 300);
+    while(is_touchdown());
+
+//    delay(5);
+    rpc_answer_push(&p, 4);
+    rpc_answer_push(&r, 4);
+    //delay(32);
+    //pp_printf("touchdown at %d %d %d LO %d\n\r", p, servo_get_sensor(), servo_get_setpoint(), esc_get_radial_position());
+  }
+
+  rpc_answer_commit(RPC_ID_PROFILE_HEIGHT);
+  servo_set_target(initial_setpoint, 1);
+
+}
+
+void cmd_ldrive_step(struct rpc_request *rq)
+{
+  int dir = rpc_pop_int32(rq);
+
+  ldrive_step(dir);
+}
+
+void cmd_ldrive_read_encoder(struct rpc_request *rq)
+{
+  int i = ldrive_get_encoder_value(0);
+  int q = ldrive_get_encoder_value(1);
+
+  rpc_answer_push(&i, 4);
+  rpc_answer_push(&q, 4);
+
+  rpc_answer_commit(RPC_ID_LDRIVE_READ_ENCODER);
 }
 
 
@@ -233,9 +293,12 @@ void main_loop()
   while (1)
   {
     esc_control_update();
-
+    //pp_printf("touch %d\n\r", is_touchdown());
     if(tmo_hit(&keepalive))
-      pp_printf("Heartbeat!\n\r");
+    {
+      pp_printf("Heartbeat [enc_i = %d, enc_q = %d]!\n\r", ldrive_get_encoder_value(0),  ldrive_get_encoder_value(1));
+      //pp_printf("servo %d %d\n\r", servo_get_sensor(), servo_get_setpoint());
+    }
 
     if(!rpc_request_get(&rq))
       continue;
@@ -247,11 +310,16 @@ void main_loop()
       case RPC_ID_GET_ESC_SPEED: cmd_esc_get_speed(&rq); break;
       case RPC_ID_SET_ESC_SPEED: cmd_esc_set_speed(&rq); break;
       case RPC_ID_SERVO_RESPONSE: cmd_servo_response(&rq); break;
+      case RPC_ID_PROFILE_HEIGHT: cmd_profile_height(&rq); break;
+      case RPC_ID_LDRIVE_STEP: cmd_ldrive_step(&rq); break;
+      case RPC_ID_LDRIVE_READ_ENCODER: cmd_ldrive_read_encoder(&rq); break;
 
       default: break;
     }
   }
 }
+
+
 
 int main(void)
 {
@@ -278,105 +346,16 @@ int main(void)
     usart_init();
     //clock_info();
     servo_init();
+    ldrive_init();
+    hv_init();
     esc_init();
     esc_set_speed(10.0);
 
-    //test_tacho();
-
-    //test_servo_dma();
+    strobe_led(0);
     main_loop();
 
 
-
-    for(;;)
-    {
-      FlagStatus f1 = DMA_GetFlagStatus(DMA2_Stream0, DMA_FLAG_TCIF0);
-      if(f1)
-      {
-        dump_buf();
-        break;
-      }
-
-
-
-    }
-
-    for(;;);
-    //main_loop();
-#if 0
-
-//    pwm_init();
-
-  //  hv_init();
-
-
-  //  fet_charge(0);
-   // fet_break(0);
-
-    //servo_drive_set(1000);
-
-    servo_set_setpoint(2500);
-    //servo_set_setpoint( 1000 );
-
-
-   /* for(;;)
-    {
-      adc_samples = 0;
-      delay(1000);
-      pp_printf("samples: %d\n\r", adc_samples);
-    }*/
-
-    //for(;;)
-    {
-      //pp_printf("s = start response test\n\r");
-      //while(wait_key() != 's');
-
-      pp_printf("Response test...\n\r");
-
-      //test();
-      servo_start_logging(0);
-
-      delay(100);
-
-      for(;;)
-        handle_kb();
-
-      for(;;)//for(int i=0;i<3;i++)
-      {
-        servo_set_setpoint(1000);
-        delay(100);
-        servo_set_setpoint(1000);
-        delay(100);
-      }
-
-      struct servo_log_entry *log;
-      int log_samples;
-
-      servo_stop_logging(&log, &log_samples);
-
-      pp_printf("@respstart %d\n\r", log_samples);
-
-
-      for(int i = 0; i < log_samples; i++)
-      {
-        pp_printf("@respdata %d %d %d %d\n\r", i, log[i].setpoint, log[i].error, log[i].y);
-      }
-
-for(;;)
-{
-        //pp_printf("last_x %d\n\r",last_x);
-        //handle_kb();
-      }
-
-      servo_set_setpoint(2000);
-
-
-
-    }
-
-
-#endif
-
+    return 0;
 }
 
 
