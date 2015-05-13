@@ -1,6 +1,8 @@
   // PB7 = servo PWM HI
   // PB8 = servo PWM LO
 
+#include <stdlib.h>
+
 #include "stm32f4xx_conf.h"
 #include "stm32f4xx.h"
 
@@ -556,5 +558,8 @@ int servo_get_sensor()
 
 int ldrive_get_encoder_value(int i)
 {
-  return adc_enc_val[i];
+  int midscale = 4095 * 140 / 330;
+
+
+  return adc_enc_val[i] - midscale;
 }

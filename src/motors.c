@@ -3,10 +3,47 @@
 
 #include "common.h"
 
+#include <stdlib.h>
+#include <string.h>
 #include <limits.h>
 
-static float esc_target_speed = 0.0;
-static uint32_t esc_update_count_last = 0;
+#define LDRIVE_IDLE 1
+#define LDRIVE_GO_HOME 2
+#define LDRIVE_STEP 3
+#define LDRIVE_GO_TO 4
+
+struct ldrive_state
+{
+  int state;
+  int next_state;
+  int remaining_steps_out;
+  int remaining_steps_in;
+  int dir;
+  int home_count;
+  int step_tics;
+  struct timeout step_timeout;
+};
+
+struct ldrive_state ldrive;
+
+struct pi_control
+{
+  float kp, ki;
+  float integrator;
+  float y_bias, y_min, y_max;
+  float x0;
+};
+
+struct esc_state {
+  float target_speed;
+  uint32_t update_count_last;
+  struct pi_control pi;
+  int strobe_angle_marks;
+  int strobe_duration;
+};
+
+static struct esc_state esc;
+
 
 int esc_pwm_init()
 {
@@ -58,6 +95,8 @@ int esc_pwm_init()
 
   /* TIM3 enable counter */
   TIM_Cmd(TIM3, ENABLE);
+
+
 
   return 0;
 }
@@ -117,13 +156,6 @@ static void EXTILine12_Config(void)
 }
 
 
-struct pi_control
-{
-  float kp, ki;
-  float integrator;
-  float y_bias, y_min, y_max;
-  float x0;
-};
 
 
 void pi_init( struct pi_control *pi )
@@ -160,6 +192,7 @@ void esc_init()
     TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
 
     RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
 
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
@@ -172,6 +205,19 @@ void esc_init()
 
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
 
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP ;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+    //GPIO_PinAFConfig(GPIOA, GPIO_PinSource0, GPIO_AF_TIM2);
+
+    /* Connect TIM3 pins to AF2 */
+    GPIO_PinAFConfig(GPIOC, GPIO_PinSource6, GPIO_AF_TIM3);
+
+
   /* Time base configuration */
     TIM_TimeBaseStructure.TIM_Period = 0xffffffff;
     TIM_TimeBaseStructure.TIM_Prescaler = 0;
@@ -179,18 +225,21 @@ void esc_init()
     TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
 
     TIM_TimeBaseInit(TIM2, &TIM_TimeBaseStructure);
-    TIM_ARRPreloadConfig(TIM2, ENABLE);
+    TIM_OC1PreloadConfig(TIM2, TIM_OCPreload_Disable);
 
     /* TIM2 enable counter */
     TIM_Cmd(TIM2, ENABLE);
 
-    esc_pi.ki = 0.00005;
-    esc_pi.kp = 0.05;
-    esc_pi.y_min = 0.0;
-    esc_pi.y_max = 1.0;
-    esc_pi.y_bias = 0.5;
+    esc.strobe_angle_marks = 0;
+    esc.strobe_duration = 32; // 0..255
 
-    pi_init(&esc_pi);
+    esc.pi.ki = 0.00005;
+    esc.pi.kp = 0.05;
+    esc.pi.y_min = 0.0;
+    esc.pi.y_max = 1.0;
+    esc.pi.y_bias = 0.5;
+
+    pi_init(&esc.pi);
 
     esc_pwm_init();
     pp_printf("PWM initialized\n\r");
@@ -220,6 +269,7 @@ void esc_pulse_handler()
 {
   uint32_t tics = TIM_GetCounter(TIM2);
 
+
   if(last_esc_tics_valid)
   {
     int delta;
@@ -241,11 +291,24 @@ void esc_pulse_handler()
 
       if(delta > esc_expected_value / 3)
       {
+/*        TIM_OCInitTypeDef  TIM_OCInitStructure;
+
+        TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_Inactive;
+        TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
+        TIM_OCInitStructure.TIM_Pulse = 0;
+        TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;*/
+
+        if(esc_mark_count == esc.strobe_angle_marks)
+          GPIO_SetBits(GPIOA, GPIO_Pin_0);
+        else
+          GPIO_ResetBits(GPIOA, GPIO_Pin_0);
+
         esc_mark_count ++;
         esc_last_origin = tics;
       }
     }
   }
+
 
   last_tacho_ticks = get_ticks_count();
 
@@ -270,7 +333,7 @@ int esc_compute_outliers()
 {
   int pf[PULSE_FILTER_SIZE];
 
-  memcpy(pf, esc_pulse_filter, PULSE_FILTER_SIZE * sizeof(int));
+  memcpy(pf, (const void *)esc_pulse_filter, PULSE_FILTER_SIZE * sizeof(int));
   bsort(pf, PULSE_FILTER_SIZE);
   int median = pf[PULSE_FILTER_SIZE/2];
     int avg = 0, n = 0, i;
@@ -340,7 +403,7 @@ float esc_get_speed_rps()
 
 void esc_set_speed ( float setpoint_rps )
 {
-  esc_target_speed = setpoint_rps;
+  esc.target_speed = setpoint_rps;
 }
 
 #define ESC_UPDATE_PERIOD_MS 10 // ms
@@ -350,13 +413,13 @@ void esc_control_update()
 #if 1
   uint32_t ticks = get_ticks_count();
 
-  if(ticks - esc_update_count_last >= ESC_UPDATE_PERIOD_MS)
+  if(ticks - esc.update_count_last >= ESC_UPDATE_PERIOD_MS)
   {
-    esc_update_count_last = ticks;
+    esc.update_count_last = ticks;
 
-    float err = esc_target_speed - esc_get_speed_rps();
+    float err = esc.target_speed - esc_get_speed_rps();
 
-    float y = pi_update(&esc_pi, err);
+    float y = pi_update(&esc.pi, err);
 
     //pp_printf("speed %d err %d throttle %d orig %d pos %d\n\r", (int)esc_get_speed_rps(), (int)(1000.0*err), (int)(1000.0*y), esc_last_origin, esc_get_radial_position());
 
@@ -393,7 +456,12 @@ void ldrive_init()
     GPIO_ResetBits(GPIOC, GPIO_Pin_5);
     GPIO_ResetBits(GPIOC, GPIO_Pin_9);
 
-    esc_init();
+    ldrive.state = LDRIVE_IDLE;
+    ldrive.home_count = 0;
+    ldrive.remaining_steps_out = 70;
+    ldrive.step_tics = 2;
+
+
 }
 
 void ldrive_step( int dir )
@@ -438,4 +506,103 @@ int esc_get_radial_position()
 
 
   return (esc_mark_count - 1) * 200 + ( 200LL * ((int64_t)cnt - origin) / esc_expected_value );
+}
+
+int inside_range(int value, int rmin, int rmax)
+{
+  return ( value >= rmin && value <= rmax );
+}
+
+
+
+void ldrive_update()
+{
+  switch(ldrive.state)
+  {
+    case LDRIVE_IDLE:
+      return;
+
+    case LDRIVE_GO_HOME:
+    {
+      ldrive.next_state = LDRIVE_GO_HOME;
+      ldrive.state = LDRIVE_STEP;
+      tmo_init(&ldrive.step_timeout, ldrive.step_tics);
+      ldrive_step(ldrive.remaining_steps_out ? 0 : 1);
+      if(ldrive.remaining_steps_out)
+        ldrive.remaining_steps_out--;
+
+
+      int enc_i = ldrive_get_encoder_value(0);
+      int enc_q = ldrive_get_encoder_value(1);
+
+      //pp_printf("remStepsOut %d i %d q %d\n\r", ldrive.remaining_steps_out, enc_i, enc_q);
+
+      if(!ldrive.remaining_steps_out && inside_range(enc_i, -200, 1000) && inside_range(enc_q, -500, 500))
+      {
+        ldrive.home_count++;
+      } else
+        ldrive.home_count = 0;
+
+      if(ldrive.home_count == 70 )
+        ldrive.state = LDRIVE_IDLE;
+
+      break;
+    }
+
+
+    case LDRIVE_STEP:
+      if(tmo_hit(&ldrive.step_timeout))
+        ldrive.state = ldrive.next_state;
+      break;
+
+    case LDRIVE_GO_TO:
+      if(ldrive.remaining_steps_out == 0 && ldrive.remaining_steps_in == 0)
+      {
+        ldrive.state = LDRIVE_IDLE;
+        return;
+      }
+
+      tmo_init(&ldrive.step_timeout, ldrive.step_tics);
+
+      ldrive.next_state = LDRIVE_GO_TO;
+      ldrive.state = LDRIVE_STEP;
+
+      ldrive_step(ldrive.remaining_steps_out ? 0 : 1);
+
+      if(ldrive.remaining_steps_out)
+        ldrive.remaining_steps_out--;
+      if(ldrive.remaining_steps_in)
+        ldrive.remaining_steps_in--;
+
+      //pp_printf("goto: steps-in %d steps-out %d\n\r", ldrive.remaining_steps_in, ldrive.remaining_steps_out);
+      break;
+  }
+}
+
+void ldrive_go_home()
+{
+  ldrive.state = LDRIVE_GO_HOME;
+  ldrive.home_count = 0;
+  ldrive.remaining_steps_out = 70;
+  ldrive.step_tics = 2;
+}
+
+void ldrive_advance_by(int amount, int speed)
+{
+  ldrive.step_tics=  speed;
+
+  if(amount < 0)
+  {
+    ldrive.remaining_steps_out = -amount;
+    ldrive.remaining_steps_in = 0;
+  } else {
+    ldrive.remaining_steps_in = amount;
+    ldrive.remaining_steps_out = 0;
+  }
+  ldrive.state = LDRIVE_GO_TO;
+}
+
+int ldrive_idle()
+{
+  return (ldrive.state == LDRIVE_IDLE) ? 1 : 0;
 }

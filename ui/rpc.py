@@ -91,6 +91,11 @@ class SteveControl:
     ID_ESC_GET_SPEED = 0x3
     ID_SERVO_RESPONSE = 0x4
     ID_PROFILE_HEIGHT = 0x5
+    ID_LDRIVE_STEP = 0x6
+    ID_LDRIVE_READ_ENCODER = 0x7
+    ID_LDRIVE_CHECK_IDLE = 0x8
+    ID_LDRIVE_GO_HOME = 0x9
+
 
     def __init__(self, conn):
         self.conn = conn
@@ -152,6 +157,25 @@ class SteveControl:
             rv2['h'].append(s[1])
 
         return rv2
+
+    def ldrive_step(self, dir):
+        self.conn.send( UsbRpcMessage( self.ID_LDRIVE_STEP, struct.pack(">i", dir) ) )
+
+    def ldrive_read_encoder(self):
+        self.conn.send( UsbRpcMessage( self.ID_LDRIVE_READ_ENCODER, struct.pack(">i", 1) ) )
+        rsp = self.conn.receive()
+        i,q=struct.unpack("<ii", rsp.data)
+        return i,q
+
+    def ldrive_check_idle(self):
+        self.conn.send( UsbRpcMessage( self.ID_LDRIVE_CHECK_IDLE, struct.pack(">i", 1) ) )
+        rsp = self.conn.receive()
+        idle = struct.unpack("<i", rsp.data)
+        return idle[0]
+
+    def ldrive_go_home(self):
+        self.conn.send( UsbRpcMessage( self.ID_LDRIVE_GO_HOME, struct.pack(">i", 1) ) )
+
 
 #conn = UsbRpcConnection()
 #ctl = SteveControl( conn )

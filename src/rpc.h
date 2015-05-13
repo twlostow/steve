@@ -10,6 +10,9 @@
 #define RPC_ID_PROFILE_HEIGHT 0x5
 #define RPC_ID_LDRIVE_STEP 0x6
 #define RPC_ID_LDRIVE_READ_ENCODER 0x7
+#define RPC_ID_LDRIVE_CHECK_IDLE 0x8
+#define RPC_ID_LDRIVE_GO_HOME 0x9
+
 
 struct rpc_request {
     int id;

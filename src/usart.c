@@ -84,7 +84,7 @@ void USART2_IRQHandler(void)
         USART_ITConfig(USART2, USART_IT_TXE, DISABLE);
 }
 
-void usart_send ( uint8_t *buf, int count )
+void usart_send ( const uint8_t *buf, int count )
 {
     int irq_enabled = 0;
 

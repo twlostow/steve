@@ -7,14 +7,12 @@
 #include "servo.h"
 #include "rpc.h"
 #include "motors.h"
+#include "common.h"
 
-extern void pwm_test();
 void fet_charge(int on);
 void fet_break(int on);
 int is_touchdown();
-uint32_t get_ticks_count();
 void hv_init();
-void delay(int ms);
 
 
 void clock_info()
@@ -244,9 +242,9 @@ void cmd_profile_height(struct rpc_request *rq)
 
 void cmd_ldrive_step(struct rpc_request *rq)
 {
-  int dir = rpc_pop_int32(rq);
+  int count = rpc_pop_int32(rq);
 
-  ldrive_step(dir);
+  ldrive_advance_by(count, 10);
 }
 
 void cmd_ldrive_read_encoder(struct rpc_request *rq)
@@ -254,34 +252,23 @@ void cmd_ldrive_read_encoder(struct rpc_request *rq)
   int i = ldrive_get_encoder_value(0);
   int q = ldrive_get_encoder_value(1);
 
+
   rpc_answer_push(&i, 4);
   rpc_answer_push(&q, 4);
 
   rpc_answer_commit(RPC_ID_LDRIVE_READ_ENCODER);
 }
 
-
-
-struct timeout {
-  uint32_t last;
-  uint32_t period;
-};
-
-void tmo_init(struct timeout *tmo, uint32_t period)
+void cmd_ldrive_go_home()
 {
-  tmo->last = get_ticks_count();
-  tmo->period = period;
+  ldrive_go_home();
 }
 
-int tmo_hit(struct timeout *tmo)
+void cmd_ldrive_check_idle()
 {
-  uint32_t t =  get_ticks_count();
-  if(t - tmo->last >= tmo->period)
-  {
-    tmo->last = t;
-    return 1;
-  }
-  return 0;
+  int idle = ldrive_idle();
+  rpc_answer_push(&idle, 4);
+  rpc_answer_commit(RPC_ID_LDRIVE_CHECK_IDLE);
 }
 
 void main_loop()
@@ -293,6 +280,8 @@ void main_loop()
   while (1)
   {
     esc_control_update();
+    ldrive_update();
+
     //pp_printf("touch %d\n\r", is_touchdown());
     if(tmo_hit(&keepalive))
     {
@@ -313,6 +302,8 @@ void main_loop()
       case RPC_ID_PROFILE_HEIGHT: cmd_profile_height(&rq); break;
       case RPC_ID_LDRIVE_STEP: cmd_ldrive_step(&rq); break;
       case RPC_ID_LDRIVE_READ_ENCODER: cmd_ldrive_read_encoder(&rq); break;
+      case RPC_ID_LDRIVE_GO_HOME: cmd_ldrive_go_home(&rq); break;
+      case RPC_ID_LDRIVE_CHECK_IDLE: cmd_ldrive_check_idle(&rq); break;
 
       default: break;
     }
@@ -353,6 +344,17 @@ int main(void)
 
     strobe_led(0);
     main_loop();
+
+    ldrive_go_home();
+
+    while(!ldrive_idle())
+      ldrive_update();
+
+
+    ldrive_advance_by(-500, 4);
+
+    for(;;)
+          ldrive_update();
 
 
     return 0;

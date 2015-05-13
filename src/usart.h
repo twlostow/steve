@@ -53,7 +53,7 @@ static inline void usart_fifo_init(volatile usart_fifo_t *fifo)
 }
 
 void usart_init();
-void usart_send ( uint8_t *buf, int count );
+void usart_send ( const uint8_t *buf, int count );
 int usart_poll();
 int usart_recv ( uint8_t *buf, int count, int blocking );
 int usart_rx_char();
