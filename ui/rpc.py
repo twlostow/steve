@@ -8,6 +8,8 @@ import time
 import serial
 import threading
 import Queue
+import numpy as np
+from scipy.interpolate import griddata
 
 class UsbRpcMessage:
     def __init__(self,id,data):
@@ -48,7 +50,7 @@ class UsbRpcReadoutThread(threading.Thread):
 
 class UsbRpcConnection:
 
-    def __init__(self,dev_="/dev/ttyUSB0", baudrate_=115200):
+    def __init__(self,dev_="/dev/ttyUSB1", baudrate_=115200):
         self.ser = serial.Serial(port=dev_,baudrate=baudrate_,timeout=0.1,rtscts=False)
         self.console_queue = Queue.Queue()
         self.readout_thread = UsbRpcReadoutThread(self)
@@ -85,6 +87,48 @@ class UsbRpcConnection:
         self.readout_thread.stop()
         self.readout_thread.join()
 
+class SteveHeightmap:
+    def __init__(self, filename):
+        lines=open(filename,"rb").readlines()
+        n=0
+        points = []
+        values = []
+
+        while n < len(lines):
+            tok = lines[n].split()
+            n+=1
+            if(tok[0] == 'r'):
+                samples = int(tok[5])
+                r_idx = int(tok[1])
+                r_step = int(tok[3])
+                r = r_idx * r_step
+        #   print(samples)
+                for i in range(0,samples):
+                    tok = lines[n].split()
+                    rho = float(tok[0]) / 100
+                    h = float(tok[1])
+                    points.append((r, rho))
+                    values.append(h)
+                    points.append((r, rho + 360))
+                    values.append(h)
+                    points.append((r, rho - 360))
+                    values.append(h)
+#       print(rho, h)
+                    n+=1
+
+
+        #print(points)
+        #print(values)
+        self.grid_r, self.grid_rho = np.mgrid[0:1280:1281j,0:359:360j]
+        self.grid_z = griddata(points, values, (self.grid_r, self.grid_rho), method='linear')
+
+    def map_for_ring(self, r):
+        m=[]
+        for a in range(0,360,2):
+            m.append(int(self.grid_z[r][a]))
+        #print(m)
+        return m
+
 class SteveControl:
     ID_ADC_TEST = 0x1
     ID_ESC_SET_SPEED = 0x2
@@ -95,6 +139,9 @@ class SteveControl:
     ID_LDRIVE_READ_ENCODER = 0x7
     ID_LDRIVE_CHECK_IDLE = 0x8
     ID_LDRIVE_GO_HOME = 0x9
+    ID_SERVO_SET_HEIGHTMAP = 0xa
+    ID_SERVO_ENABLE_HEIGHTMAP = 0xb
+    ID_ETCH_SINGLE_SPOT = 0xc
 
 
     def __init__(self, conn):
@@ -176,11 +223,15 @@ class SteveControl:
     def ldrive_go_home(self):
         self.conn.send( UsbRpcMessage( self.ID_LDRIVE_GO_HOME, struct.pack(">i", 1) ) )
 
+    def set_heightmap(self, hmap):
+        print(hmap)
+        msg =  UsbRpcMessage( self.ID_SERVO_SET_HEIGHTMAP, struct.pack(">180I", *hmap) )
+        #print('HMAPS:', msg.size())
+        self.conn.send(msg)
+        #pass
 
-#conn = UsbRpcConnection()
-#ctl = SteveControl( conn )
+    def enable_heightmap(self, enable, height):
+        self.conn.send( UsbRpcMessage( self.ID_SERVO_ENABLE_HEIGHTMAP, struct.pack(">II", enable, height) ) )
 
-#print(ctl.test_adc_acquisition(1024))
-
-
-
+    def etch_single_spot(self):
+        self.conn.send( UsbRpcMessage( self.ID_ETCH_SINGLE_SPOT, struct.pack(">i", 1) ) )

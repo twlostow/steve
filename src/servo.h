@@ -22,7 +22,7 @@ int servo_position_ready();
 int servo_get_sensor();
 void servo_all_back(int duration_samples);
 
-
-int ldrive_get_encoder_value(int i);
+void servo_heightmap_set(int mark, int height);
+void servo_heightmap_enable(int enable, int hover_distance);
 
 #endif

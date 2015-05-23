@@ -77,6 +77,12 @@ static volatile int adc_samples = 0;
 static volatile struct servo_log_entry servo_log[SERVO_LOG_SIZE];
 static volatile int servo_log_start = 0, servo_log_count = SERVO_LOG_SIZE;
 
+static volatile uint16_t servo_heightmap[360];
+static volatile int servo_heightmap_lag = 8;
+static volatile int servo_heightmap_enabled = 0;
+static volatile int servo_hover_distance = 200;
+
+
 static inline void servo_drive_set(int value)
 {
   if( value < 0 )
@@ -89,7 +95,29 @@ static inline void servo_drive_set(int value)
   }
 }
 
+static inline void heightmap_update()
+{
+  int marks = esc_get_mark_count() + servo_heightmap_lag;
 
+  if(marks >= 180)
+    marks -= 180;
+
+  if(marks < 0)
+    marks = 0;
+
+  servo_setpoint = servo_heightmap[marks] + servo_hover_distance;
+}
+
+void servo_heightmap_set(int mark, int height)
+{
+  servo_heightmap[mark] = height;
+}
+
+void servo_heightmap_enable(int enable, int hover_distance)
+{
+  servo_hover_distance = hover_distance;
+  servo_heightmap_enabled = enable;
+}
 
 static inline void servo_update(int x)
 {
@@ -128,14 +156,19 @@ static inline void servo_update(int x)
   servo_drive_set ( y );
   int ddv = abs(servo_setpoint - servo_target);
 
-  if (ddv > servo_dvdt)
+  if(!servo_heightmap_enabled)
   {
-    if(servo_setpoint < servo_target)
-      servo_setpoint += servo_dvdt;
-    else if (servo_setpoint > servo_target)
-      servo_setpoint -= servo_dvdt;
+    if (ddv > servo_dvdt)
+    {
+      if(servo_setpoint < servo_target)
+        servo_setpoint += servo_dvdt;
+      else if (servo_setpoint > servo_target)
+        servo_setpoint -= servo_dvdt;
+    } else {
+      servo_setpoint = servo_target;
+    }
   } else {
-    servo_setpoint = servo_target;
+    heightmap_update();
   }
 
   if(adc_samples > servo_log_start && servo_log_count < SERVO_LOG_SIZE)
@@ -151,8 +184,11 @@ static volatile uint16_t *test_acq_buf;
 static volatile int test_acq_count = 0;
 #define ADC_DMA_BUF_SIZE 32
 
+#define ENC_AVERAGE 64
+
 static volatile uint16_t adc_dma_buf[ADC_DMA_BUF_SIZE];
-static volatile uint16_t adc_enc_val[2];
+static volatile uint32_t adc_enc_val[2], adc_enc_acc[2];
+static volatile int adc_enc_sample_count = 0;
 
 static inline void sample_encoders()
 {
@@ -168,7 +204,16 @@ static inline void sample_encoders()
 
   while(! ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC) );
   ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
-  adc_enc_val[0] = ADC_GetConversionValue(ADC1);
+
+  int s = ADC_GetConversionValue(ADC1);
+  if(adc_enc_sample_count == 0)
+    adc_enc_acc[0] = s;
+  else
+    adc_enc_acc[0] += s;
+
+
+
+
   ADC_Cmd(ADC1, DISABLE);
 
   ADC_RegularChannelConfig(ADC1, ADC_Channel_12, 1, ADC_SampleTime_15Cycles);
@@ -177,7 +222,21 @@ static inline void sample_encoders()
 
   while(! ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC) );
   ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
-  adc_enc_val[1] = ADC_GetConversionValue(ADC1);
+
+   s = ADC_GetConversionValue(ADC1);
+  if(adc_enc_sample_count == 0)
+    adc_enc_acc[1] = s;
+  else
+    adc_enc_acc[1] += s;
+
+  adc_enc_sample_count++;
+
+  if(adc_enc_sample_count == ENC_AVERAGE)
+  {
+    adc_enc_val[0] = adc_enc_acc[0];
+    adc_enc_val[1] = adc_enc_acc[1];
+    adc_enc_sample_count = 0;
+  }
 
   ADC_Cmd(ADC1, DISABLE);
 
@@ -339,8 +398,8 @@ static void servo_adc_init()
   NVIC_InitTypeDef NVIC_InitStructure;
 
   NVIC_InitStructure.NVIC_IRQChannel = DMA2_Stream0_IRQn;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
-  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0xf;
+  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0xf;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
 
@@ -449,8 +508,8 @@ void servo_init()
     bdf_init( &servo.dfun );
 
 
-    servo.gain_p = 2.3 * 11 * 270;//1.0 * 255; //0.8*255;
-    servo.gain_d1 =  3400;//4*15 * 900; //3000;
+    servo.gain_p = 1.8 * 11 * 270;//1.0 * 255; //0.8*255;
+    servo.gain_d1 =  2800;//4*15 * 900; //3000;
     servo.gain_i = 1;
     servo.bias = 320;
     servo.integ = 0;
@@ -561,5 +620,5 @@ int ldrive_get_encoder_value(int i)
   int midscale = 4095 * 140 / 330;
 
 
-  return adc_enc_val[i] - midscale;
+  return (adc_enc_val[i] / ENC_AVERAGE) - midscale;
 }

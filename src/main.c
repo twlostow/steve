@@ -244,6 +244,7 @@ void cmd_ldrive_step(struct rpc_request *rq)
 {
   int count = rpc_pop_int32(rq);
 
+  //ldrive_step( dir );
   ldrive_advance_by(count, 10);
 }
 
@@ -259,17 +260,51 @@ void cmd_ldrive_read_encoder(struct rpc_request *rq)
   rpc_answer_commit(RPC_ID_LDRIVE_READ_ENCODER);
 }
 
-void cmd_ldrive_go_home()
+void cmd_ldrive_go_home(struct rpc_request *rq)
 {
   ldrive_go_home();
 }
 
-void cmd_ldrive_check_idle()
+void cmd_ldrive_check_idle(struct rpc_request *rq)
 {
   int idle = ldrive_idle();
   rpc_answer_push(&idle, 4);
   rpc_answer_commit(RPC_ID_LDRIVE_CHECK_IDLE);
 }
+
+void cmd_servo_set_heightmap(struct rpc_request *rq)
+{
+  int i;
+  for(i=0;i<180;i++)
+  {
+    int h=rpc_pop_int32(rq);
+    pp_printf("ang %d h %d\n\r", i, h);
+    servo_heightmap_set(i, h);
+  }
+}
+
+void cmd_servo_enable_heightmap(struct rpc_request *rq)
+{
+  int enable = rpc_pop_int32(rq);
+  int height = rpc_pop_int32(rq);
+
+  pp_printf("hmap-enable %d %d\n\r",enable,height);
+  if(!enable)
+  {
+    servo_set_setpoint(height);
+  }
+
+  servo_heightmap_enable(enable, height);
+
+
+}
+
+void cmd_etch_single_spot(struct rpc_request *rq)
+{
+  uint32_t t = TIM_GetCounter(TIM2);
+  etch_start(t + 100000);
+}
+
 
 void main_loop()
 {
@@ -285,7 +320,7 @@ void main_loop()
     //pp_printf("touch %d\n\r", is_touchdown());
     if(tmo_hit(&keepalive))
     {
-      pp_printf("Heartbeat [enc_i = %d, enc_q = %d]!\n\r", ldrive_get_encoder_value(0),  ldrive_get_encoder_value(1));
+      pp_printf("Heartbeat etch-irq %d\n", hv_irq_count());
       //pp_printf("servo %d %d\n\r", servo_get_sensor(), servo_get_setpoint());
     }
 
@@ -304,7 +339,9 @@ void main_loop()
       case RPC_ID_LDRIVE_READ_ENCODER: cmd_ldrive_read_encoder(&rq); break;
       case RPC_ID_LDRIVE_GO_HOME: cmd_ldrive_go_home(&rq); break;
       case RPC_ID_LDRIVE_CHECK_IDLE: cmd_ldrive_check_idle(&rq); break;
-
+      case RPC_ID_SERVO_SET_HEIGHTMAP: cmd_servo_set_heightmap(&rq); break;
+      case RPC_ID_SERVO_ENABLE_HEIGHTMAP: cmd_servo_enable_heightmap(&rq); break;
+      case RPC_ID_ETCH_SINGLE_SPOT: cmd_etch_single_spot(&rq); break;
       default: break;
     }
   }
@@ -332,17 +369,21 @@ int main(void)
     GPIO_InitStructure.GPIO_Speed = GPIO_Fast_Speed;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
-
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
 
     usart_init();
+
+
+
     //clock_info();
     servo_init();
     ldrive_init();
-    hv_init();
+    etch_init();
     esc_init();
     esc_set_speed(10.0);
+    //etch_init();
 
-    strobe_led(0);
+
     main_loop();
 
     ldrive_go_home();

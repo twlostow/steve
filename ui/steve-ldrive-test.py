@@ -18,10 +18,12 @@ tt=[]
 alpha_t=[]
 
 n=0
-for i in range(0,300):
-    ctl.ldrive_step(0);
+f=open("enc.txt","wb")
+for i in range(0,200):
+    ctl.ldrive_step(1);
     time.sleep(0.01)
     i,q=ctl.ldrive_read_encoder();
+    f.write("%d %d\n" %(i,q))
     #print(i,q)
     alpha = math.atan2(q,i) * 180 / math.pi;
     it.append(i)
@@ -30,6 +32,7 @@ for i in range(0,300):
     tt.append(n)
     n+=1
     print(n)
+f.close()
 
 plt.plot(tt, it,label="Encoder [i]")
 plt.plot(tt, qt,label="Encoder [q]")

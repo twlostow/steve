@@ -1,7 +1,7 @@
 #ifndef __RPC_H
 #define __RPC_H
 
-#define RPC_BUFFER_SIZE 1024
+#define RPC_BUFFER_SIZE 2048
 
 #define RPC_ID_ADC_TEST 0x1
 #define RPC_ID_SET_ESC_SPEED 0x2
@@ -12,7 +12,9 @@
 #define RPC_ID_LDRIVE_READ_ENCODER 0x7
 #define RPC_ID_LDRIVE_CHECK_IDLE 0x8
 #define RPC_ID_LDRIVE_GO_HOME 0x9
-
+#define RPC_ID_SERVO_SET_HEIGHTMAP 0xa
+#define RPC_ID_SERVO_ENABLE_HEIGHTMAP 0xb
+#define RPC_ID_ETCH_SINGLE_SPOT 0xc
 
 struct rpc_request {
     int id;

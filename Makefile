@@ -10,7 +10,7 @@ OBJ_DIR = bin
 vpath %.c $(PROJECT_SRC)
 vpath %.c $(STM_SRC)
 
-SRCS = main.c motors.c usart.c vsprintf-xint.c printf.c adc.c biquad.c servo.c rpc.c
+SRCS = main.c motors.c usart.c vsprintf-xint.c printf.c hv.c biquad.c servo.c rpc.c
 
 SRCS += Device/startup_stm32f401xe.s
 

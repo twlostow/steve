@@ -27,4 +27,8 @@ static inline int tmo_hit(struct timeout *tmo)
 }
 
 
+void etch_start(uint32_t start_at);
+int etch_is_idle();
+void etch_init();
+
 #endif

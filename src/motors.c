@@ -6,11 +6,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358
+#endif
 
 #define LDRIVE_IDLE 1
-#define LDRIVE_GO_HOME 2
+#define LDRIVE_FIND_HOMEZONE 2
 #define LDRIVE_STEP 3
 #define LDRIVE_GO_TO 4
+#define LDRIVE_GO_HOME 5
+
+#define HOME_ZONE_SIZE 64
+#define HOME_ZONE_THRESHOLD 40.0
+
+struct ldrive_encoder_state
+{
+    int i, q;
+    float wrap;
+    float ang_prev;
+    int valid;
+    float home_zone_log[HOME_ZONE_SIZE];
+    int home_zone_samples;
+    int last_dir;
+};
 
 struct ldrive_state
 {
@@ -22,6 +42,7 @@ struct ldrive_state
   int home_count;
   int step_tics;
   struct timeout step_timeout;
+  struct ldrive_encoder_state enc;
 };
 
 struct ldrive_state ldrive;
@@ -203,20 +224,24 @@ void esc_init()
 
     EXTILine12_Config();
 
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+    //RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
 
+   #if 0
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
     GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
     GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP ;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
+  #endif
 
     //GPIO_PinAFConfig(GPIOA, GPIO_PinSource0, GPIO_AF_TIM2);
 
     /* Connect TIM3 pins to AF2 */
     GPIO_PinAFConfig(GPIOC, GPIO_PinSource6, GPIO_AF_TIM3);
 
+
+#if 0
 
   /* Time base configuration */
     TIM_TimeBaseStructure.TIM_Period = 0xffffffff;
@@ -229,6 +254,8 @@ void esc_init()
 
     /* TIM2 enable counter */
     TIM_Cmd(TIM2, ENABLE);
+
+#endif
 
     esc.strobe_angle_marks = 0;
     esc.strobe_duration = 32; // 0..255
@@ -433,6 +460,82 @@ void esc_control_update()
 
 
 
+
+void ldrive_update_encoder(struct ldrive_encoder_state *enc, int i, int q, int dir)
+{
+    enc->i = i;
+    enc->q = q;
+    float ang = atan2((float)i, (float)q) * 180.0 / M_PI;
+
+    if(enc->valid)
+    {
+        float da = (ang - enc->ang_prev);
+
+  if(da < -180.0)
+      enc->wrap += 360.0;
+  else if(da > 180.0)
+      enc->wrap -= 360.0;
+    }
+
+    enc->ang_prev = ang;
+
+//    if(dir != enc->last_dir)
+  //  {
+  //enc->home_zone_samples = 0;
+   // }
+
+    enc->home_zone_log[enc->home_zone_samples % HOME_ZONE_SIZE] = ang;
+    enc->home_zone_samples++;
+
+    enc->last_dir = dir;
+
+    enc->valid = 1;
+    // update the log
+
+}
+
+void ldrive_init_encoder(struct ldrive_encoder_state *enc)
+{
+    enc->wrap = 0.0;
+    enc->valid = 0;
+    enc->home_zone_samples = 0;
+}
+
+float ldrive_get_position(struct ldrive_encoder_state *enc)
+{
+    return enc->ang_prev + enc->wrap;
+}
+
+int ldrive_is_home_zone(struct ldrive_encoder_state *enc)
+{
+    if(enc->home_zone_samples < HOME_ZONE_SIZE)
+      return 0;
+
+    int i;
+
+    float s = 0.0;
+
+    for(i=0;i<HOME_ZONE_SIZE;i++)
+      s += enc->home_zone_log[i];
+
+    float max_d = 0.0;
+    s /= (float) HOME_ZONE_SIZE;
+
+    for(i=0;i<HOME_ZONE_SIZE;i++)
+    {
+      float delta = fabs(s - enc->home_zone_log[i]);
+//      pp_printf("delta %d\n", (int)delta);
+      if(delta > HOME_ZONE_THRESHOLD)
+        return 0;
+    }
+
+    return 1;
+
+
+}
+
+
+
 void ldrive_init()
 {
     GPIO_InitTypeDef  GPIO_InitStructure;
@@ -459,13 +562,15 @@ void ldrive_init()
     ldrive.state = LDRIVE_IDLE;
     ldrive.home_count = 0;
     ldrive.remaining_steps_out = 70;
-    ldrive.step_tics = 2;
+    ldrive.step_tics = 4;
 
+    ldrive_init_encoder(&ldrive.enc);
 
 }
 
 void ldrive_step( int dir )
 {
+
     if(dir)
       GPIO_ResetBits(GPIOC, GPIO_Pin_9);
     else
@@ -508,6 +613,11 @@ int esc_get_radial_position()
   return (esc_mark_count - 1) * 200 + ( 200LL * ((int64_t)cnt - origin) / esc_expected_value );
 }
 
+int esc_get_mark_count()
+{
+  return (esc_mark_count);
+}
+
 int inside_range(int value, int rmin, int rmax)
 {
   return ( value >= rmin && value <= rmax );
@@ -517,37 +627,67 @@ int inside_range(int value, int rmin, int rmax)
 
 void ldrive_update()
 {
+  int dir = ldrive.remaining_steps_out ? 0 : 1;
+
+  int enc_i = ldrive_get_encoder_value(0);
+  int enc_q = ldrive_get_encoder_value(1);
+
+
   switch(ldrive.state)
   {
     case LDRIVE_IDLE:
       return;
 
+    case LDRIVE_FIND_HOMEZONE:
+    {
+      ldrive.next_state = LDRIVE_FIND_HOMEZONE;
+      ldrive.state = LDRIVE_STEP;
+
+      tmo_init(&ldrive.step_timeout, ldrive.step_tics);
+      ldrive_update_encoder(&ldrive.enc, enc_i, enc_q, 0);
+      ldrive_step(dir);
+      if(ldrive.remaining_steps_out)
+      {
+        ldrive.remaining_steps_out--;
+        ldrive.enc.home_zone_samples = 0;
+      }
+
+      pp_printf("rso %d i %d q %d ang %d dir %d is_h %d\n", ldrive.remaining_steps_out, enc_i, enc_q, (int)ldrive_get_position(&ldrive.enc), dir, ldrive_is_home_zone(&ldrive.enc));
+
+
+
+      if( (!ldrive.remaining_steps_out) && ldrive_is_home_zone(&ldrive.enc) )
+      {
+        pp_printf("Home zone found\n");
+        ldrive.state = LDRIVE_GO_HOME;
+      }
+
+      break;
+    }
+
     case LDRIVE_GO_HOME:
     {
       ldrive.next_state = LDRIVE_GO_HOME;
       ldrive.state = LDRIVE_STEP;
+
       tmo_init(&ldrive.step_timeout, ldrive.step_tics);
-      ldrive_step(ldrive.remaining_steps_out ? 0 : 1);
-      if(ldrive.remaining_steps_out)
-        ldrive.remaining_steps_out--;
+      ldrive_update_encoder(&ldrive.enc, enc_i, enc_q, 0);
+      ldrive_step(0);
+
+      pp_printf("rso %d i %d q %d and %d dir %d is_h %d\n", ldrive.remaining_steps_out, enc_i, enc_q, (int)ldrive_get_position(&ldrive.enc), dir, ldrive_is_home_zone(&ldrive.enc));
 
 
-      int enc_i = ldrive_get_encoder_value(0);
-      int enc_q = ldrive_get_encoder_value(1);
-
-      //pp_printf("remStepsOut %d i %d q %d\n\r", ldrive.remaining_steps_out, enc_i, enc_q);
-
-      if(!ldrive.remaining_steps_out && inside_range(enc_i, -200, 1000) && inside_range(enc_q, -500, 500))
+      if(!ldrive_is_home_zone(&ldrive.enc) )
       {
-        ldrive.home_count++;
-      } else
-        ldrive.home_count = 0;
+        pp_printf("Home zone edge found\n");
 
-      if(ldrive.home_count == 70 )
         ldrive.state = LDRIVE_IDLE;
+      }
 
       break;
     }
+
+
 
 
     case LDRIVE_STEP:
@@ -567,6 +707,7 @@ void ldrive_update()
       ldrive.next_state = LDRIVE_GO_TO;
       ldrive.state = LDRIVE_STEP;
 
+      ldrive_update_encoder(&ldrive.enc, enc_i, enc_q, 0);
       ldrive_step(ldrive.remaining_steps_out ? 0 : 1);
 
       if(ldrive.remaining_steps_out)
@@ -581,10 +722,11 @@ void ldrive_update()
 
 void ldrive_go_home()
 {
-  ldrive.state = LDRIVE_GO_HOME;
+  //pp_printf("GoHome!\n");
+  ldrive.state = LDRIVE_FIND_HOMEZONE;
   ldrive.home_count = 0;
   ldrive.remaining_steps_out = 70;
-  ldrive.step_tics = 2;
+  ldrive.step_tics = 10;
 }
 
 void ldrive_advance_by(int amount, int speed)
